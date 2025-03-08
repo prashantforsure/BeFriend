@@ -1,0 +1,190 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// NextAuth Models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Core Application Models
+model User {
+  id             String    @id @default(cuid())
+  name           String?
+  email          String?   @unique
+  emailVerified  DateTime?
+  image          String?
+  phoneNumber    String?   @unique
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  accounts       Account[]
+  sessions       Session[]
+  preferences    UserPreferences?
+  conversations  Conversation[]
+  callLogs       CallLog[]
+}
+
+model UserPreferences {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  defaultPersona    String    @default("friend") // friend, girlfriend, colleague, sibling
+  preferredVoice    String    @default("default")
+  sendReadReceipts  Boolean   @default(true)
+  allowDataStorage  Boolean   @default(true)
+  theme             String    @default("light")
+  language          String    @default("en")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model Persona {
+  id               String    @id @default(cuid())
+  name             String    // friend, girlfriend, colleague, sibling, etc.
+  description      String
+  voiceId          String?   // Reference to a voice ID in ElevenLabs
+  promptTemplate   String    @db.Text  // Base prompt template for this persona
+  isDefault        Boolean   @default(false)
+  isSystem         Boolean   @default(true)  // If true, this is a system persona that can't be deleted
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  conversations    Conversation[]
+}
+
+model Conversation {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  personaId      String
+  persona        Persona   @relation(fields: [personaId], references: [id])
+  title          String?   // Auto-generated or user-defined title
+  messages       Message[]
+  callLogs       CallLog[]
+  summaryContext String?   @db.Text  // Summarized context for long conversations
+  startedAt      DateTime  @default(now())
+  lastMessageAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([personaId])
+}
+
+model Message {
+  id             String    @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  content        String    @db.Text
+  isFromUser     Boolean
+  sentiment      String?   // analyzed sentiment (optional)
+  audioUrl       String?   // URL to stored audio file (if any)
+  createdAt      DateTime  @default(now())
+
+  @@index([conversationId])
+}
+
+model CallLog {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId   String?
+  conversation     Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  phoneNumber      String
+  direction        String    // "inbound" or "outbound"
+  status           String    // "initiated", "ringing", "in-progress", "completed", "failed"
+  startTime        DateTime
+  endTime          DateTime?
+  duration         Int?      // in seconds
+  recordingUrl     String?   // URL to call recording (if enabled and applicable)
+  twilioCallSid    String?   // Twilio Call SID for reference
+  errorMessage     String?   // Error message if call failed
+  
+  @@index([userId])
+  @@index([conversationId])
+  @@index([twilioCallSid])
+}
+
+model WhatsAppSession {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  phoneNumber    String
+  sessionToken   String    @unique
+  isActive       Boolean   @default(true)
+  lastActivity   DateTime  @default(now())
+  expiresAt      DateTime
+  
+  @@index([userId])
+  @@index([phoneNumber])
+  @@index([sessionToken])
+}
+
+model VoiceProfile {
+  id             String    @id @default(cuid())
+  name           String
+  provider       String    // "elevenlabs", "aws", etc.
+  providerVoiceId String   // ID of the voice in the provider's system
+  isDefault      Boolean   @default(false)
+  isSystem       Boolean   @default(true)
+  characteristics Json?    // Store voice characteristics (pitch, speed, etc.)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+// For analytics and rate limiting
+model ApiUsage {
+  id             String    @id @default(cuid())
+  userId         String
+  endpoint       String
+  count          Int       @default(0)
+  lastUsed       DateTime  @default(now())
+  resetAt        DateTime  // When the count resets
+  
+  @@unique([userId, endpoint])
+  @@index([userId])
+}
