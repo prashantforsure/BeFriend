@@ -13,19 +13,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// NextAuth Models
+// Next Auth related models
 model Account {
-  id                String  @id @default(cuid())
+  id                String   @id @default(cuid())
   userId            String
   type              String
   provider          String
   providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
+  refresh_token     String?  @db.Text
+  access_token      String?  @db.Text
   expires_at        Int?
   token_type        String?
   scope             String?
-  id_token          String? @db.Text
+  id_token          String?  @db.Text
   session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -52,139 +52,222 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-// Core Application Models
-model User {
-  id             String    @id @default(cuid())
-  name           String?
-  email          String?   @unique
-  emailVerified  DateTime?
-  image          String?
-  phoneNumber    String?   @unique
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+/// Core Application Models
 
-  accounts       Account[]
-  sessions       Session[]
-  preferences    UserPreferences?
-  conversations  Conversation[]
-  callLogs       CallLog[]
+model User {
+  id              String            @id @default(cuid())
+  name            String?
+  email           String?           @unique
+  emailVerified   DateTime?
+  image           String?
+  phoneNumber     String?           @unique
+  subscriptionTier SubscriptionTier @default(FREE)
+  callCredits     Int               @default(5)  // Free credits for new users
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  accounts        Account[]
+  sessions        Session[]
+  preferences     UserPreferences?
+  conversations   Conversation[]
+  callLogs        CallLog[]
+  whatsappSession WhatsAppSession?
 }
 
 model UserPreferences {
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  defaultPersonaId     String?
+  preferredVoiceId     String?
+  notificationsEnabled Boolean  @default(true)
+  language             String   @default("en")
+  maxCallDuration      Int      @default(300)  // Maximum call duration in seconds (5 min default)
+  autoRenewCall        Boolean  @default(false) // Auto-renew calls when they end
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  defaultPersona Persona?       @relation(fields: [defaultPersonaId], references: [id])
+  preferredVoice VoiceProfile?  @relation(fields: [preferredVoiceId], references: [id])
+
+  @@index([userId])
+}
+
+/// Predefined personas that determine AI tone and behavior
+model Persona {
   id                String    @id @default(cuid())
-  userId            String    @unique
-  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  defaultPersona    String    @default("friend") // friend, girlfriend, colleague, sibling
-  preferredVoice    String    @default("default")
-  sendReadReceipts  Boolean   @default(true)
-  allowDataStorage  Boolean   @default(true)
-  theme             String    @default("light")
-  language          String    @default("en")
+  name              String
+  description       String
+  imageUrl          String?
+  voiceId           String?   // Reference to a voice profile
+  promptTemplate    String    @db.Text  // Base prompt template for this persona
+  conversationStarters Json?   // Array of suggested conversation starters
+  memoryEnabled    Boolean   @default(true) // Whether this persona remembers past conversations
+  isDefault         Boolean   @default(false)
+  isSystem          Boolean   @default(true) // If true, cannot be deleted
+  isPremium         Boolean   @default(false) // Premium personas require subscription
+  isActive          Boolean   @default(true)
+  category          PersonaCategory @default(FRIEND) // Categorizes personas
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  @@index([userId])
+  conversations     Conversation[]
+  userPreferences   UserPreferences[]
+  voice             VoiceProfile?    @relation(fields: [voiceId], references: [id])
+
+  @@index([category])
+  @@index([isActive])
+  @@index([isPremium])
 }
 
-model Persona {
-  id               String    @id @default(cuid())
-  name             String    // friend, girlfriend, colleague, sibling, etc.
-  description      String
-  voiceId          String?   // Reference to a voice ID in ElevenLabs
-  promptTemplate   String    @db.Text  // Base prompt template for this persona
-  isDefault        Boolean   @default(false)
-  isSystem         Boolean   @default(true)  // If true, this is a system persona that can't be deleted
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  conversations    Conversation[]
-}
-
+/// Conversations initiated via WhatsApp
 model Conversation {
   id             String    @id @default(cuid())
   userId         String
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   personaId      String
-  persona        Persona   @relation(fields: [personaId], references: [id])
-  title          String?   // Auto-generated or user-defined title
-  messages       Message[]
-  callLogs       CallLog[]
-  summaryContext String?   @db.Text  // Summarized context for long conversations
+  title          String?   // Optional title for the conversation
+  summary        String?   @db.Text // AI-generated summary of the conversation
   startedAt      DateTime  @default(now())
-  lastMessageAt  DateTime  @default(now())
+  endedAt        DateTime?
+  isArchived     Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  persona  Persona @relation(fields: [personaId], references: [id])
+  messages Message[]
+  callLogs CallLog[]
 
   @@index([userId])
   @@index([personaId])
+  @@index([isArchived])
 }
 
+/// Individual messages in a conversation
 model Message {
-  id             String    @id @default(cuid())
+  id             String       @id @default(cuid())
   conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  content        String    @db.Text
-  isFromUser     Boolean
-  sentiment      String?   // analyzed sentiment (optional)
-  audioUrl       String?   // URL to stored audio file (if any)
-  createdAt      DateTime  @default(now())
+  content        String       @db.Text
+  role           MessageRole  // 'user' or 'assistant'
+  audioUrl       String?      // URL of the audio file, if applicable
+  duration       Float?       // Duration of the audio in seconds
+  sentiment      String?      // Optional sentiment analysis
+  createdAt      DateTime     @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
+  @@index([role])
 }
 
+/// Log of WhatsApp voice calls
 model CallLog {
-  id               String    @id @default(cuid())
-  userId           String
-  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  conversationId   String?
-  conversation     Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  phoneNumber      String
-  direction        String    // "inbound" or "outbound"
-  status           String    // "initiated", "ringing", "in-progress", "completed", "failed"
-  startTime        DateTime
-  endTime          DateTime?
-  duration         Int?      // in seconds
-  recordingUrl     String?   // URL to call recording (if enabled and applicable)
-  twilioCallSid    String?   // Twilio Call SID for reference
-  errorMessage     String?   // Error message if call failed
-  
+  id             String        @id @default(cuid())
+  userId         String
+  conversationId String?
+  twilioCallSid  String?       // Twilio Call SID for reference
+  phoneNumber    String
+  direction      CallDirection // "inbound" or "outbound"
+  status         CallStatus    // e.g., "initiated", "ringing", "completed", "failed"
+  startTime      DateTime      @default(now())
+  endTime        DateTime?
+  duration       Int?          // Duration in seconds
+  recordingUrl   String?       // URL for call recording
+  fromNumber     String?       // Twilio number
+  toNumber       String?       // User's number
+  errorMessage   String?       // Error details, if any
+  rating         Int?          // Optional user rating (1-5)
+  feedback       String?       // Optional user feedback
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
   @@index([userId])
   @@index([conversationId])
   @@index([twilioCallSid])
+  @@index([status])
 }
 
+/// Manages WhatsApp integration sessions
 model WhatsAppSession {
-  id             String    @id @default(cuid())
-  userId         String    @unique
-  phoneNumber    String
-  sessionToken   String    @unique
-  isActive       Boolean   @default(true)
-  lastActivity   DateTime  @default(now())
-  expiresAt      DateTime
-  
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  phoneNumber  String
+  sessionToken String   @unique
+  isActive     Boolean  @default(true)
+  lastActivity DateTime @default(now())
+  expiresAt    DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@index([phoneNumber])
   @@index([sessionToken])
 }
 
+/// Stores voice configuration details for text-to-speech
 model VoiceProfile {
-  id             String    @id @default(cuid())
-  name           String
-  provider       String    // "elevenlabs", "aws", etc.
+  id              String   @id @default(cuid())
+  name            String
+  provider        VoiceProvider // e.g., "elevenlabs", "aws"
   providerVoiceId String   // ID of the voice in the provider's system
-  isDefault      Boolean   @default(false)
-  isSystem       Boolean   @default(true)
-  characteristics Json?    // Store voice characteristics (pitch, speed, etc.)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  gender          String?
+  accent          String?
+  isDefault       Boolean  @default(false)
+  isSystem        Boolean  @default(true)
+  isPremium       Boolean  @default(false) // Premium voices require subscription
+  characteristics Json?    // Optional voice characteristics (pitch, speed, etc.)
+  previewUrl      String?  // URL to a preview audio sample
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  userPreferences UserPreferences[]
+  personas        Persona[]
 }
 
-// For analytics and rate limiting
-model ApiUsage {
-  id             String    @id @default(cuid())
-  userId         String
-  endpoint       String
-  count          Int       @default(0)
-  lastUsed       DateTime  @default(now())
-  resetAt        DateTime  // When the count resets
-  
-  @@unique([userId, endpoint])
-  @@index([userId])
+// Subscription tiers
+enum SubscriptionTier {
+  FREE
+  PREMIUM
+  BUSINESS
+}
+
+// Define the message role enum
+enum MessageRole {
+  user
+  assistant
+}
+
+// Define call direction enum
+enum CallDirection {
+  inbound
+  outbound
+}
+
+// Define call status enum
+enum CallStatus {
+  initiated
+  ringing
+  in_progress
+  completed
+  failed
+  busy
+  no_answer
+  canceled
+}
+
+// Define persona categories
+enum PersonaCategory {
+  FRIEND
+  GIRLFRIEND
+  COLLEAGUE
+  SIBLING
+  CUSTOM
+}
+
+// Define voice providers
+enum VoiceProvider {
+  elevenlabs
+  aws_polly
+  google
+  azure
 }
