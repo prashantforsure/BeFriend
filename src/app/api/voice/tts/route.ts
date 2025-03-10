@@ -5,15 +5,11 @@ import { authOptions } from '@/lib/auth/auth';
 import prisma from '@/lib/prisma';
 import elevenLabsService from '@/services/elevanlabs';
 
+
 export const config = {
   runtime: 'edge',
 };
 
-/**
- * API Route for Text-to-Speech conversion
- * Endpoint: /api/voice/tts
- * Method: POST
- */
 export async function POST(req: NextRequest) {
   try {
     // Get session for authenticated routes
@@ -159,7 +155,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Return the appropriate response based on return type
+    // Return the response with message ID and speech result
     return NextResponse.json({
       messageId: message.id,
       ...speechResult,

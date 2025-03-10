@@ -5,16 +5,13 @@ import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import prisma from '@/lib/prisma';
 
-
-// Configuration
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-const DEFAULT_VOICE_ID = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL'; // Default voice
+const DEFAULT_VOICE_ID = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
 const TTS_ENDPOINT = 'text-to-speech';
 const VOICES_ENDPOINT = 'voices';
 const TMP_DIR = os.tmpdir();
 
-// Error class
 export class ElevenLabsError extends Error {
   statusCode?: number;
   constructor(message: string, statusCode?: number) {
@@ -24,7 +21,6 @@ export class ElevenLabsError extends Error {
   }
 }
 
-// Types
 export interface TTSOptions {
   voiceId?: string;
   stability?: number; // 0 to 1
@@ -44,7 +40,6 @@ export interface Voice {
   preview_url_wav?: string;
 }
 
-// Main service class
 export class ElevenLabsService {
   private apiKey: string;
   private apiUrl: string;
@@ -59,7 +54,7 @@ export class ElevenLabsService {
   }
   
   /**
-   * Convert text to speech and return the audio file path
+   * Convert text to speech and return the audio buffer and content type.
    */
   async textToSpeech(
     text: string, 
@@ -80,7 +75,7 @@ export class ElevenLabsService {
         }
       };
       
-      // Make API request
+      // Make API request to ElevenLabs TTS endpoint
       const response = await axios.post(
         `${this.apiUrl}/${TTS_ENDPOINT}/${voiceId}`,
         ttsParams,
@@ -91,11 +86,10 @@ export class ElevenLabsService {
             'Content-Type': 'application/json',
           },
           responseType: 'arraybuffer',
-          timeout: 30000, // 30 second timeout
+          timeout: 30000, // 30-second timeout
         }
       );
       
-      // Return the audio buffer and content type
       return {
         audioBuffer: Buffer.from(response.data),
         contentType: 'audio/mpeg'
@@ -106,16 +100,14 @@ export class ElevenLabsService {
         const errorMessage = error.response?.data 
           ? this.tryParseErrorMessage(error.response.data)
           : error.message;
-          
         throw new ElevenLabsError(`ElevenLabs API error: ${errorMessage}`, statusCode);
       }
-      
       throw new ElevenLabsError(`Failed to convert text to speech: ${(error as Error).message}`);
     }
   }
   
   /**
-   * Convert text to speech and save to a temporary file
+   * Convert text to speech and save to a temporary file.
    */
   async textToSpeechFile(
     text: string, 
@@ -124,11 +116,10 @@ export class ElevenLabsService {
     try {
       const { audioBuffer, contentType } = await this.textToSpeech(text, options);
       
-      // Generate a unique filename
+      // Generate a unique filename and temporary file path
       const filename = `tts-${uuidv4()}.mp3`;
       const filePath = path.join(TMP_DIR, filename);
       
-      // Write the buffer to a temporary file
       fs.writeFileSync(filePath, audioBuffer);
       
       return { filePath, contentType };
@@ -138,7 +129,37 @@ export class ElevenLabsService {
   }
   
   /**
-   * Get all available voices from ElevenLabs
+   * Generate speech using ElevenLabs and return result based on returnType.
+   * Supports 'url' (using a temporary file) and 'base64' (or 'stream', treated as base64).
+   */
+  async generateSpeech(params: {
+    text: string;
+    voiceId: string;
+    outputFormat: string;
+    returnType: string;
+  }): Promise<{ audioUrl?: string, audioBase64?: string, contentType: string, duration?: number, error?: string }> {
+    try {
+      if (params.returnType === 'url') {
+        const { filePath, contentType } = await this.textToSpeechFile(params.text, { voiceId: params.voiceId });
+        // For demonstration purposes, we return the local file path as the audioUrl.
+        // In a production environment, you might upload this file to cloud storage and return its public URL.
+        return { audioUrl: filePath, contentType };
+      } else {
+        // For 'base64' or 'stream', convert the audio buffer to a base64 string.
+        const { audioBuffer, contentType } = await this.textToSpeech(params.text, { voiceId: params.voiceId });
+        const audioBase64 = audioBuffer.toString('base64');
+        return { audioBase64, contentType };
+      }
+    } catch (error) {
+      if (error instanceof ElevenLabsError) {
+        return { error: error.message, contentType: '' };
+      }
+      return { error: (error as Error).message, contentType: '' };
+    }
+  }
+  
+  /**
+   * Get all available voices from ElevenLabs.
    */
   async getVoices(): Promise<Voice[]> {
     try {
@@ -151,7 +172,6 @@ export class ElevenLabsService {
           },
         }
       );
-      
       return response.data.voices;
     } catch (error) {
       if (axios.isAxiosError(error)) {
@@ -159,26 +179,20 @@ export class ElevenLabsService {
         const errorMessage = error.response?.data?.message || error.message;
         throw new ElevenLabsError(`ElevenLabs API error: ${errorMessage}`, statusCode);
       }
-      
       throw new ElevenLabsError(`Failed to fetch voices: ${(error as Error).message}`);
     }
   }
   
   /**
-   * Sync ElevenLabs voices with our database
+   * Sync ElevenLabs voices with our database.
    */
   async syncVoicesToDatabase(): Promise<void> {
     try {
-      // Get all voices from ElevenLabs
       const voices = await this.getVoices();
-      
-      // For each voice, create or update in our database
       for (const voice of voices) {
         await prisma.voiceProfile.upsert({
           where: {
-            // Use a composite unique constraint or search by provider + providerVoiceId
-            // This is a simplified version - you'll need to adjust based on your schema
-            id: voice.voice_id, // This assumes you're using the ElevenLabs IDs as your IDs
+            id: voice.voice_id,
           },
           update: {
             name: voice.name,
@@ -191,7 +205,7 @@ export class ElevenLabsService {
             updatedAt: new Date(),
           },
           create: {
-            id: voice.voice_id, // Use the ElevenLabs ID as our ID
+            id: voice.voice_id,
             name: voice.name,
             provider: 'elevenlabs',
             providerVoiceId: voice.voice_id,
@@ -200,7 +214,7 @@ export class ElevenLabsService {
             previewUrl: voice.preview_url,
             isSystem: true,
             isDefault: false,
-            isPremium: false, // You might want to determine this based on voice quality
+            isPremium: false,
           },
         });
       }
@@ -210,7 +224,7 @@ export class ElevenLabsService {
   }
   
   /**
-   * Try to parse error message from buffer
+   * Try to parse an error message from response data.
    */
   private tryParseErrorMessage(data: any): string {
     try {
@@ -219,11 +233,9 @@ export class ElevenLabsService {
         const jsonData = JSON.parse(textData);
         return jsonData.detail?.message || jsonData.message || textData;
       }
-      
       if (typeof data === 'object') {
         return data.detail?.message || data.message || JSON.stringify(data);
       }
-      
       return String(data);
     } catch (err) {
       return 'Unknown error occurred';
@@ -231,7 +243,7 @@ export class ElevenLabsService {
   }
   
   /**
-   * Helper method to get a voice profile from the database
+   * Helper method to get a voice profile from the database.
    */
   async getVoiceProfile(voiceId: string): Promise<any> {
     return prisma.voiceProfile.findUnique({
@@ -240,6 +252,5 @@ export class ElevenLabsService {
   }
 }
 
-// Export a singleton instance
 const elevenLabsService = new ElevenLabsService();
 export default elevenLabsService;

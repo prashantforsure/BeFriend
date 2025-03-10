@@ -1,17 +1,15 @@
 import axios from 'axios';
-
 import { Message } from '@prisma/client';
 import prisma from '@/lib/prisma';
 
-// Configuration
 const TOGETHER_API_URL = 'https://api.together.xyz/v1/completions';
 const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
-const DEFAULT_MODEL = 'mistralai/Mistral-7B-Instruct-v0.2'; // Default model
+const DEFAULT_MODEL = 'mistralai/Mistral-7B-Instruct-v0.2';
 const MAX_TOKENS = 1000;
 const TEMPERATURE = 0.7;
-const MAX_MESSAGES_HISTORY = 10; // Number of previous messages to include for context
+const MAX_MESSAGES_HISTORY = 10; 
 
-// Error classes
+// Error class
 export class TogetherAIError extends Error {
   statusCode?: number;
   constructor(message: string, statusCode?: number) {
@@ -21,7 +19,6 @@ export class TogetherAIError extends Error {
   }
 }
 
-// Types for Together AI
 interface TogetherAIResponse {
   id: string;
   object: string;
@@ -81,8 +78,10 @@ export class TogetherAIService {
         throw new TogetherAIError('Persona not found', 404);
       }
       
-      // Get conversation history
-      const conversationHistory = await this.getConversationHistory(conversationId);
+      // Get conversation history only if conversationId is provided
+      const conversationHistory = conversationId 
+        ? await this.getConversationHistory(conversationId)
+        : [];
       
       // Construct prompt with context
       const prompt = await this.constructPrompt(
@@ -118,8 +117,10 @@ export class TogetherAIService {
       // Extract and clean the response text
       const generatedText = this.cleanResponse(response.data.choices[0].text);
       
-      // Save the response to the conversation history
-      await this.saveMessageToHistory(conversationId, generatedText, 'assistant');
+      // Save the assistant response to conversation history if conversationId is provided
+      if (conversationId) {
+        await this.saveMessageToHistory(conversationId, generatedText, 'assistant');
+      }
       
       return generatedText;
     } catch (error) {
